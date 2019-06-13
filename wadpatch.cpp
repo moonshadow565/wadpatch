@@ -2,8 +2,10 @@
 #include <Windows.h>
 #include <cstring>
 #include <cstdlib>
-#include <inttypes.h>
+#include <cinttypes>
+#include <cstdio>
 
+//#define LOG_STUFF 1
 #ifdef LOG_STUFF
 #include <cstdio>
 #endif
@@ -13,7 +15,7 @@
 #define MALLOC_LINE 51
 
 // offset in league
-#define MALLOC_IMPL_OFF (0x2470994 - 0xDE0000)
+#define MALLOC_IMPL_OFF 0x016A99EC
 
 /* Todo sig scan:
 A1 94 09 47 02  ; mov eax, malloc_impl
@@ -34,7 +36,6 @@ FF D0           ; call eax
 // OpenSSL 1.1.1b definitions
 extern "C" {
     using malloc_f = void*(*)(size_t num, const char *file, int line);
-    static malloc_f malloc_org = nullptr;
     #define EVP_MD_CTX_FLAG_CLEANED         0x0002
     #define EVP_PKEY_FLAG_SIGCTX_CUSTOM     4
     #define EVP_MD_CTX_FLAG_FINALISE        0x0200
@@ -149,6 +150,87 @@ extern "C" {
 }
 
 extern "C" {
+    static int md_update (EVP_MD_CTX *ctx, const void *data, size_t count) {
+        ((void)ctx, (void)data, (void)count);
+        return 1;
+    }
+    static int md_final (EVP_MD_CTX *ctx, unsigned char *md){
+        ((void)ctx, (void)md);
+        return 1;
+    }
+
+    static int pmeth_verify (EVP_PKEY_CTX *ctx,
+                             const unsigned char *sig, size_t siglen,
+                             const unsigned char *tbs, size_t tbslen) {
+        ((void)ctx,(void)sig,(void)siglen,(void)tbs,(void)tbslen);
+        return 1;
+    }
+    static int pmeth_verifyctx (EVP_PKEY_CTX *ctx,
+                                const unsigned char *sig, int siglen,
+                                EVP_MD_CTX *mctx) {
+        ((void)ctx,(void)sig,(void)siglen,(void)mctx);
+        return 1;
+    }
+    static int pmeth_ctrl(EVP_PKEY_CTX *ctx, int type, int p1, void *p2) {
+        ((void)ctx,(void)type,(void)p1,(void)p2);
+        return 1;
+    }
+    static int pmeth_digest_custom(EVP_PKEY_CTX *ctx, EVP_MD_CTX *mctx) {
+        ((void)ctx, (void)mctx);
+        return 1;
+    }
+
+    static const EVP_MD dummy_md = {
+        0,                              // type
+        0,                              // pkey_type
+        32,                             // md_size
+        0,                              // flags
+        nullptr,                        // int (*init)
+        md_update,                      // int (*update)
+        md_final,                       // int (*md_final)
+        nullptr,                        // int (*copy)
+        nullptr,                        // int (*cleanup)
+        0,                              // block_size
+        4,                              // ctx_size
+        nullptr,                        // int (*md_ctrl)
+    };
+
+    static const EVP_PKEY_METHOD pmeth = {
+        0,                              // pkey_id
+        EVP_PKEY_FLAG_SIGCTX_CUSTOM,    // flags
+        nullptr,                        // int (*init)
+        nullptr,                        // int (*copy)
+        nullptr,                        // void (*cleanup)
+        nullptr,                        // int (*paramgen_init)
+        nullptr,                        // int (*paramgen)
+        nullptr,                        // int (*keygen_init)
+        nullptr,                        // int (*keygen)
+        nullptr,                        // int (*sign_init)
+        nullptr,                        // int (*sign)
+        nullptr,                        // int (*verify_init)
+        pmeth_verify,                   // int (*verify)
+        nullptr,                        // int (*verify_recover_init)
+        nullptr,                        // int (*verify_recover)
+        nullptr,                        // int (*signctx_init)
+        nullptr,                        // int (*signctx)
+        nullptr,                        // int (*verifyctx_init)
+        pmeth_verifyctx,                // int (*verifyctx)
+        nullptr,                        // int (*encrypt_init)
+        nullptr,                        // int (*encrypt)
+        nullptr,                        // int (*decrypt_init)
+        nullptr,                        // int (*decrypt)
+        nullptr,                        // int (*derive_init)
+        nullptr,                        // int (*derive)
+        pmeth_ctrl,                     // int (*ctrl)
+        nullptr,                        // int (*ctrl_str)
+        nullptr,                        // int (*digestsign)
+        nullptr,                        // int (*digestverify)
+        nullptr,                        // int (*check)
+        nullptr,                        // int (*public_check)
+        nullptr,                        // int (*param_check)
+        pmeth_digest_custom,            // int (*digest_custom)
+    };
+
     // Basically stock malloc with memzero
     void* malloc_custom(size_t num, const char * file, int line) {
         //printf("OPENSSL_malloc(%u, %s, %u)\n", num, file, line);
@@ -162,54 +244,20 @@ extern "C" {
     }
 
     // Populate EVP_MD_CTX for EVP_DigestVerifyFinal to return true
-    void* malloc_hook(EVP_MD_CTX* mdctx) {
+    void* fill_ctx(EVP_MD_CTX* mdctx) {
         if(mdctx == nullptr) {
             return mdctx;
         }
-        static const EVP_PKEY_METHOD pmeth = [](){
-            EVP_PKEY_METHOD pmeth;
-            pmeth.flags = EVP_PKEY_FLAG_SIGCTX_CUSTOM;
-            pmeth.verify = [](auto, auto, auto, auto, auto) -> int {
-                return 1;
-            };
-            /*
-            pmeth.verifyctx = [](auto, auto, auto, auto) -> int {
-                return 1;
-            };
-            */
-            pmeth.ctrl = [](auto, auto, auto, auto) -> int {
-                return 1;
-            };
-            pmeth.digest_custom = [](auto, auto) -> int {
-                return 1;
-            };
-            return pmeth;
-        }();
-        static const EVP_MD dummy_md = []() {
-            EVP_MD md;
-            md.md_size = 32;
-            //md.md_size = 256;
-            md.ctx_size = 4;
-            md.update =[](auto, auto, auto) -> int {
-                return 1;
-            };
-            md.final = [](auto, auto) -> int {
-                return 1;
-            };
-            return md;
-        }();
         // printf("Patching up!\n");
-        mdctx->digest = &dummy_md;
-        mdctx->flags = EVP_MD_CTX_FLAG_FINALISE;
-        mdctx->md_data = malloc(4);
-        mdctx->update = mdctx->digest->update;
-
         EVP_PKEY_CTX* pctx = reinterpret_cast<EVP_PKEY_CTX*>(
-                    malloc(sizeof(EVP_PKEY_CTX))
-                    );
+                    malloc(sizeof(EVP_PKEY_CTX)));
         memset(pctx, 0, sizeof(EVP_PKEY_CTX));
         pctx->pmeth = &pmeth;
         mdctx->pctx = pctx;
+        mdctx->flags = EVP_MD_CTX_FLAG_FINALISE;
+        mdctx->digest = &dummy_md;
+        mdctx->md_data = malloc(4);
+        mdctx->update = mdctx->digest->update;
         return mdctx;
     }
 
@@ -220,9 +268,6 @@ extern "C" {
                  || strcmp(file, "crypto\\evp\\digest.c") != 0) {
              return false;
          }
-#ifdef LOG_STUFF
-         printf("SSL_zalloc(%u, %s, %u);\n", num, file, line);
-#endif
          return true;
          /*
          // Scanning for rito private key on stack , wtf??
@@ -261,7 +306,7 @@ void *CRYPTO_zalloc(size_t num, const char *file, int line)
 }
 */
 
-__declspec(naked) void malloc_hook_trampoline() {
+__declspec(naked) void malloc_hook() {
     __asm {
         push ebp
         mov ebp, esp
@@ -279,7 +324,7 @@ patchup:
         call malloc_custom
         add esp, 12      ; remove forward args
         push eax         ; push allocated ptr
-        call malloc_hook ; init EVP_MD_CTX >:D
+        call fill_ctx    ; init EVP_MD_CTX >:D
         add esp, 4       ; remove ptr
         pop ebp          ; restore ebp
         add esp, 4       ; remove ret adress
@@ -290,25 +335,34 @@ patchup:
     }
 }
 
+extern "C" __declspec(dllexport) void wadpatch(uint32_t offset) {
+#ifdef LOG_STUFF
+        AllocConsole();
+        freopen("CONOUT$", "w", stdout);
+#endif
+    if(FILE* file = nullptr; !fopen_s(&file, "wadpatch.txt", "r") && file) {
+        uint32_t offset_file = 0;
+        if(fscanf_s(file, "0x%08X", &offset_file)) {
+            offset = offset_file;
+        }
+        fclose(file);
+    }
+    const auto handle = GetModuleHandleA(nullptr);
+    const auto base = reinterpret_cast<uintptr_t>(handle);
+    const auto target = base + offset;
+    const auto hook = reinterpret_cast<malloc_f>(&malloc_hook);
+    auto targetPtr = reinterpret_cast<malloc_f*>(target);
+    if(offset) {
+        *targetPtr = hook;
+    }
+#ifdef LOG_STUFF
+        printf("Base: 0x%08X\n", base);;
+#endif
+}
 
 BOOL WINAPI DllMain(HINSTANCE,DWORD fdwReason, LPVOID) {
 	if (fdwReason == DLL_PROCESS_ATTACH) {
-#ifdef LOG_STUFF
-        AllocConsole();
-		freopen("CONOUT$", "w", stdout);
-#endif
-		const auto handle = GetModuleHandleA(nullptr);
-		const auto base = reinterpret_cast<uintptr_t>(handle);
-        const auto target = base + MALLOC_IMPL_OFF;
-        auto targetPtr = reinterpret_cast<malloc_f*>(target);
-        malloc_org = *targetPtr;
-        *targetPtr = reinterpret_cast<malloc_f>(&malloc_hook_trampoline);
-#ifdef LOG_STUFF
-        printf("Base: 0x%08X\n", reinterpret_cast<void*>(base));
-        printf("Target: 0x%08X\n", reinterpret_cast<void*>(target));
-        printf("Original: 0x%08X\n", reinterpret_cast<void*>(malloc_org));
-        printf("Hooked: 0x%08X\n", reinterpret_cast<void*>(*targetPtr));
-#endif
+        wadpatch(MALLOC_IMPL_OFF);
 	}
 	return TRUE;
 }

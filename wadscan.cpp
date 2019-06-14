@@ -11,20 +11,17 @@
 #include <algorithm>
 
 static uint32_t SigScan(const char* const buffer, size_t size) {
+    //68 ? ? ? ? 6A 04 6A 12 8D 44 24 ? 68 ? ? ? ? 50 E8 ? ? ? ? 83 C4 14 85 C0
     auto const pattern = std::regex {
-        "\\xA1(....)"               // mov eax, malloc_impl
-        "\\x56"                     // push esi
-        "\\x57"                     // push edi
-        "\\x85\\xC0"                // test eax, eax
-        "\\x74\\x1B"                // jz short default_malloc
-        "\\x3D(....)"                 // cmp eax, CRYPTO_malloc
-        "\\x74\\x14"                // jz short default_malloc
-        "\\xFF\\x74\\x24\\x14"      // push  [esp + 0xC + 8]
-        "\\x8B\\x7C\\x24\\x10"      // mov edi, [esp + 0xC + 4]
-        "\\xFF\\x74\\x24\\x14"      // push [esp + 0xC + 8]
-        "\\x57"                     // push edi
-        "\\xFF\\xD0"                // call eax
-        "\\x83\\xC4\\x0C"           // add esp, 0xC
+        "\\x68...."             // push    offset method_compare
+        "\\x6A\\x04"            // push    4
+        "\\x6A\\x12"            // push    12h
+        "\\x8D\\x44\\x24."      // lea     eax, [esp+0x1C]
+        "\\x68(....)"           // push    offset pkey_methods
+        "\\x50"                 // push    eax
+        "\\xE8...."             // call    OBJ_bsearch_
+        "\\x83\\xC4\\x14"       // add     esp, 14h
+        "\\x85\\xC0"            // test    eax, eax
     };
 
     std::cmatch match;
@@ -183,7 +180,6 @@ static uint32_t GetOffset(Process const& process, PEHeader const& peheader) {
     }
     return 0;
 }
-
 
 int main(int argc, char** argv) {
     printf("Scanning for process...\n");

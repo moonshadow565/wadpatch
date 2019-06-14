@@ -36,9 +36,6 @@ FF D0           ; call eax
 // OpenSSL 1.1.1b definitions
 extern "C" {
     using malloc_f = void*(*)(size_t num, const char *file, int line);
-    #define EVP_MD_CTX_FLAG_CLEANED         0x0002
-    #define EVP_PKEY_FLAG_SIGCTX_CUSTOM     4
-    #define EVP_MD_CTX_FLAG_FINALISE        0x0200
     typedef struct evp_pkey_ctx_st EVP_PKEY_CTX;
     typedef struct evp_pkey_method_st EVP_PKEY_METHOD;
     typedef struct evp_pkey_st EVP_PKEY;
@@ -120,22 +117,6 @@ extern "C" {
         int keygen_info_count;
     } EVP_PKEY_CTX;
 
-    typedef struct evp_md_st {
-        int type;
-        int pkey_type;
-        int md_size;
-        unsigned long flags;
-        int (*init) (EVP_MD_CTX *ctx);
-        int (*update) (EVP_MD_CTX *ctx, const void *data, size_t count);
-        int (*final) (EVP_MD_CTX *ctx, unsigned char *md);
-        int (*copy) (EVP_MD_CTX *to, const EVP_MD_CTX *from);
-        int (*cleanup) (EVP_MD_CTX *ctx);
-        int block_size;
-        int ctx_size;               /* how big does the ctx->md_data need to be */
-        /* control function */
-        int (*md_ctrl) (EVP_MD_CTX *ctx, int cmd, int p1, void *p2);
-    } EVP_MD;
-
     typedef struct evp_md_ctx_st {
         const EVP_MD *digest;
         ENGINE *engine;             /* functional reference if 'digest' is
@@ -150,85 +131,59 @@ extern "C" {
 }
 
 extern "C" {
-    static int md_update (EVP_MD_CTX *ctx, const void *data, size_t count) {
-        ((void)ctx, (void)data, (void)count);
+    static int pmeth_init(EVP_PKEY_CTX *ctx) {
+        ((void)ctx);
         return 1;
     }
-    static int md_final (EVP_MD_CTX *ctx, unsigned char *md){
-        ((void)ctx, (void)md);
+    static int pmeth_copy(EVP_PKEY_CTX *dst, EVP_PKEY_CTX *src) {
+        ((void)dst, (void)src);
         return 1;
     }
-
-    static int pmeth_verify (EVP_PKEY_CTX *ctx,
-                             const unsigned char *sig, size_t siglen,
-                             const unsigned char *tbs, size_t tbslen) {
-        ((void)ctx,(void)sig,(void)siglen,(void)tbs,(void)tbslen);
-        return 1;
-    }
-    static int pmeth_verifyctx (EVP_PKEY_CTX *ctx,
-                                const unsigned char *sig, int siglen,
-                                EVP_MD_CTX *mctx) {
-        ((void)ctx,(void)sig,(void)siglen,(void)mctx);
+    static int pmeth_verify(EVP_PKEY_CTX *ctx,
+                            const unsigned char *sig, size_t siglen,
+                            const unsigned char *tbs, size_t tbslen) {
+        ((void)ctx, (void)sig, (void)siglen, (void)tbs, (void)tbslen);
         return 1;
     }
     static int pmeth_ctrl(EVP_PKEY_CTX *ctx, int type, int p1, void *p2) {
         ((void)ctx,(void)type,(void)p1,(void)p2);
         return 1;
     }
-    static int pmeth_digest_custom(EVP_PKEY_CTX *ctx, EVP_MD_CTX *mctx) {
-        ((void)ctx, (void)mctx);
-        return 1;
-    }
-
-    static const EVP_MD dummy_md = {
-        0,                              // type
-        0,                              // pkey_type
-        32,                             // md_size
-        0,                              // flags
-        nullptr,                        // int (*init)
-        md_update,                      // int (*update)
-        md_final,                       // int (*md_final)
-        nullptr,                        // int (*copy)
-        nullptr,                        // int (*cleanup)
-        0,                              // block_size
-        4,                              // ctx_size
-        nullptr,                        // int (*md_ctrl)
-    };
 
     static const EVP_PKEY_METHOD pmeth = {
-        0,                              // pkey_id
-        EVP_PKEY_FLAG_SIGCTX_CUSTOM,    // flags
-        nullptr,                        // int (*init)
-        nullptr,                        // int (*copy)
-        nullptr,                        // void (*cleanup)
+        6,                              // pkey_id
+        2,                              // flags
+        pmeth_init,                     // int (*init)
+        pmeth_copy,                     // int (*copy) x
+        nullptr,                        // void (*cleanup) x
         nullptr,                        // int (*paramgen_init)
         nullptr,                        // int (*paramgen)
         nullptr,                        // int (*keygen_init)
-        nullptr,                        // int (*keygen)
+        nullptr,                        // int (*keygen) x
         nullptr,                        // int (*sign_init)
-        nullptr,                        // int (*sign)
+        nullptr,                        // int (*sign) x
         nullptr,                        // int (*verify_init)
-        pmeth_verify,                   // int (*verify)
+        pmeth_verify,                   // int (*verify) x
         nullptr,                        // int (*verify_recover_init)
-        nullptr,                        // int (*verify_recover)
+        nullptr,                        // int (*verify_recover) x
         nullptr,                        // int (*signctx_init)
         nullptr,                        // int (*signctx)
         nullptr,                        // int (*verifyctx_init)
-        pmeth_verifyctx,                // int (*verifyctx)
+        nullptr,                        // int (*verifyctx) y
         nullptr,                        // int (*encrypt_init)
-        nullptr,                        // int (*encrypt)
+        nullptr,                        // int (*encrypt) x
         nullptr,                        // int (*decrypt_init)
-        nullptr,                        // int (*decrypt)
+        nullptr,                        // int (*decrypt) x
         nullptr,                        // int (*derive_init)
         nullptr,                        // int (*derive)
-        pmeth_ctrl,                     // int (*ctrl)
-        nullptr,                        // int (*ctrl_str)
+        pmeth_ctrl,                     // int (*ctrl) x
+        nullptr,                        // int (*ctrl_str) x
         nullptr,                        // int (*digestsign)
         nullptr,                        // int (*digestverify)
         nullptr,                        // int (*check)
         nullptr,                        // int (*public_check)
         nullptr,                        // int (*param_check)
-        pmeth_digest_custom,            // int (*digest_custom)
+        nullptr,                        // int (*digest_custom)
     };
 
     // Basically stock malloc with memzero
@@ -254,10 +209,6 @@ extern "C" {
         memset(pctx, 0, sizeof(EVP_PKEY_CTX));
         pctx->pmeth = &pmeth;
         mdctx->pctx = pctx;
-        mdctx->flags = EVP_MD_CTX_FLAG_FINALISE;
-        mdctx->digest = &dummy_md;
-        mdctx->md_data = malloc(4);
-        mdctx->update = mdctx->digest->update;
         return mdctx;
     }
 
